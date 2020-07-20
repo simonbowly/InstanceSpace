@@ -11,6 +11,13 @@ function model = trainIS(rootdir)
 %
 % -------------------------------------------------------------------------
 
+% Sets parpool() later using options (will have no pool if not run)
+% By god it uses ludicrous amounts of memory
+% But threaded parallelism is not supported for one of the libraries
+% used in PYTHIA
+ps = parallel.Settings;
+ps.Pool.AutoCreate = false;
+
 startProcess = tic;
 scriptdisc('trainIS.m');
 % -------------------------------------------------------------------------
@@ -47,6 +54,12 @@ if any(issource)
 end
 model.data.X = Xbar{:,isfeat};
 model.data.Y = Xbar{:,isalgo};
+
+% Parallel
+if opts.parallel.workers > 1
+    parpool(opts.parallel.workers)
+end
+
 % -------------------------------------------------------------------------
 % Giving the oportunity to pick and choose which features/algorithms to
 % work with

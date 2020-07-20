@@ -13,16 +13,6 @@ function out = PYTHIA(Z, Y, Ybin, W, Ybest, algolabels, opts)
 
 disp('  -> Initializing PYTHIA. She may take a while to complete...');
 [ninst,nalgos] = size(Ybin);
-out.cp = cell(1,nalgos);
-out.svm = cell(1,nalgos);
-out.post = cell(1,nalgos);
-out.cvcmat = zeros(nalgos,4);
-out.Ysub = false & Ybin;
-out.Yhat = false & Ybin;
-out.Pr0sub = 0.*Ybin;
-out.Pr0hat = 0.*Ybin;
-out.boxcosnt = zeros(1,nalgos);
-out.kscale = out.boxcosnt;
 disp('-------------------------------------------------------------------------');
 if opts.useweights
     disp('  -> PYTHIA will use different weights for each observation.');
@@ -39,45 +29,63 @@ else
     KernelFcn = 'gaussian';
 end
 t = tic;
-for i=1:nalgos
-    tic;
+
+% Initialise temporary variables that MATLAB can handle in a parfor loop.
+out_cp = cell(1,nalgos);
+out_svm = cell(1,nalgos);
+out_cvcmat = zeros(nalgos,4);
+out_Ysub = false & Ybin;
+out_Yhat = false & Ybin;
+out_Pr0sub = 0.*Ybin;
+out_Pr0hat = 0.*Ybin;
+out_boxcosnt = zeros(1,nalgos);
+out_kscale = out_boxcosnt;
+cvfolds = opts.cvfolds;
+
+% Need to use parfeval, otherwise parallel task distribution is wildly suboptimal
+parfor i=1:nalgos
+    % Need to check details or random number generation and tic-toc in parallel loops
     state = rng;
     rng('default');
-    out.cp{i} = cvpartition(Ybin(:,i),'Kfold',opts.cvfolds,'Stratify',true);
+    out_cp{i} = cvpartition(Ybin(:,i),'Kfold',cvfolds,'Stratify',true);
     rng('default');
-    out.svm{i} = fitcsvm(Znorm,Ybin(:,i),'Standardize',false,...
+    out_svm{i} = fitcsvm(Znorm,Ybin(:,i),'Standardize',false,...
                                          'Weights',Waux(:,i),...
                                          'CacheSize','maximal',...
                                          'RemoveDuplicates',true,...
                                          'KernelFunction',KernelFcn,...
                                          'OptimizeHyperparameters','auto',...
                                          'HyperparameterOptimizationOptions',...
-                                         struct('CVPartition',out.cp{i},...
+                                         struct('CVPartition',out_cp{i},...
                                                 'Verbose',0,...
                                                 'AcquisitionFunctionName','probability-of-improvement',...
                                                 'ShowPlots',false));
-    out.svm{i} = fitSVMPosterior(out.svm{i});
+    out_svm{i} = fitSVMPosterior(out_svm{i});
     rng(state);
-    [out.Ysub(:,i),aux] = out.svm{i}.resubPredict;
-    out.Pr0sub(:,i) = aux(:,1);
-    [out.Yhat(:,i),aux] = out.svm{i}.predict(Znorm);
-    out.Pr0hat(:,i) = aux(:,1);
-    aux = confusionmat(Ybin(:,i),out.Ysub(:,i));
-    out.cvcmat(i,:) = aux(:);
-    out.boxcosnt(i) = out.svm{i}.HyperparameterOptimizationResults.bestPoint{1,1};
-    out.kscale(i) = out.svm{i}.HyperparameterOptimizationResults.bestPoint{1,2};
-    if i==nalgos
-        disp(['    -> PYTHIA has trained a model for ''' algolabels{i}, ...
-              ''', there are no models left to train.']);
-    elseif i==nalgos-1
-        disp(['    -> PYTHIA has trained a model for ''' algolabels{i}, ...
-              ''', there is 1 model left to train.']);
-    else
-        disp(['    -> PYTHIA has trained a model for ''' algolabels{i}, ...
-              ''', there are ' num2str(nalgos-i) ' models left to train.']);
-    end
-    disp(['      -> Elapsed time: ' num2str(toc,'%.2f\n') 's']);
+    [out_Ysub(:,i),aux] = out_svm{i}.resubPredict;
+    out_Pr0sub(:,i) = aux(:,1);
+    [out_Yhat(:,i),aux] = out_svm{i}.predict(Znorm);
+    out_Pr0hat(:,i) = aux(:,1);
+    aux = confusionmat(Ybin(:,i),out_Ysub(:,i));
+    out_cvcmat(i,:) = aux(:);
+    out_boxcosnt(i) = out_svm{i}.HyperparameterOptimizationResults.bestPoint{1,1};
+    out_kscale(i) = out_svm{i}.HyperparameterOptimizationResults.bestPoint{1,2};
+
+    disp(['    -> PYTHIA has trained a model for ''' algolabels{i}, ...
+            ''', there may be some left to train but I refuse to speculate.']);
 end
+
+% Shift temporary variables back into the output structure.
+out.cp = out_cp;
+out.svm = out_svm;
+out.cvcmat = out_cvcmat;
+out.Ysub = out_Ysub;
+out.Yhat = out_Yhat;
+out.Pr0sub = out_Pr0sub;
+out.Pr0hat = out_Pr0hat;
+out.boxcosnt = out_boxcosnt;
+out.kscale = out_kscale;
+
 tn = out.cvcmat(:,1);
 fp = out.cvcmat(:,3);
 fn = out.cvcmat(:,2);
