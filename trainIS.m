@@ -11,10 +11,9 @@ function model = trainIS(rootdir)
 %
 % -------------------------------------------------------------------------
 
-% Sets parpool() later using options (will have no pool if not run)
-% By god it uses ludicrous amounts of memory
-% But threaded parallelism is not supported for one of the libraries
-% used in PYTHIA
+% Sets parpool() later using options (will have no pool if not run).
+% Threaded parallelism is not supported for one of the libraries
+% used in PYTHIA; so have to use a worker pool.
 ps = parallel.Settings;
 ps.Pool.AutoCreate = false;
 
@@ -318,7 +317,7 @@ model.cloist = CLOISTER(model.data.X, model.pilot.A, opts.cloister);
 disp('=========================================================================');
 disp('-> Summoning PYTHIA to train the prediction models.');
 disp('=========================================================================');
-model.pythia = PYTHIA(model.pilot.Z, model.data.Yraw, model.data.Ybin, model.data.W, model.data.bestPerformace, model.data.algolabels, opts.pythia);
+model.pythia = PYTHIA(model.pilot.Z, model.data.Yraw, model.data.Ybin, model.data.W, model.data.bestPerformace, model.data.algolabels, opts.pythia, opts.parallel.workers > 1);
 % -------------------------------------------------------------------------
 % Calculating the algorithm footprints.
 disp('=========================================================================');

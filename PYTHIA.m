@@ -1,4 +1,4 @@
-function out = PYTHIA(Z, Y, Ybin, W, Ybest, algolabels, opts)
+function out = PYTHIA(Z, Y, Ybin, W, Ybest, algolabels, opts, run_parallel)
 % -------------------------------------------------------------------------
 % PYTHIA.m
 % -------------------------------------------------------------------------
@@ -13,6 +13,16 @@ function out = PYTHIA(Z, Y, Ybin, W, Ybest, algolabels, opts)
 
 disp('  -> Initializing PYTHIA. She may take a while to complete...');
 [ninst,nalgos] = size(Ybin);
+out.cp = cell(1,nalgos);
+out.svm = cell(1,nalgos);
+out.post = cell(1,nalgos);
+out.cvcmat = zeros(nalgos,4);
+out.Ysub = false & Ybin;
+out.Yhat = false & Ybin;
+out.Pr0sub = 0.*Ybin;
+out.Pr0hat = 0.*Ybin;
+out.boxcosnt = zeros(1,nalgos);
+out.kscale = out.boxcosnt;
 disp('-------------------------------------------------------------------------');
 if opts.useweights
     disp('  -> PYTHIA will use different weights for each observation.');
@@ -30,61 +40,38 @@ else
 end
 t = tic;
 
-% Initialise temporary variables that MATLAB can handle in a parfor loop.
-out_cp = cell(1,nalgos);
-out_svm = cell(1,nalgos);
-out_cvcmat = zeros(nalgos,4);
-out_Ysub = false & Ybin;
-out_Yhat = false & Ybin;
-out_Pr0sub = 0.*Ybin;
-out_Pr0hat = 0.*Ybin;
-out_boxcosnt = zeros(1,nalgos);
-out_kscale = out_boxcosnt;
-cvfolds = opts.cvfolds;
+if run_parallel
+    % Need to use parfeval here; parfor does not do the kind of load balancing
+    % required for a small number of variable-length tasks.
+    futures(1:nalgos) = parallel.FevalFuture;
+    for i = 1:nalgos
+        futures(i) = parfeval(@PYTHIASingleModel, 9, ...
+            Ybin(:,i), Waux(:,i), Znorm, opts.cvfolds, KernelFcn);
+    end
 
-% Need to use parfeval, otherwise parallel task distribution is wildly suboptimal
-parfor i=1:nalgos
-    % Need to check details or random number generation and tic-toc in parallel loops
-    state = rng;
-    rng('default');
-    out_cp{i} = cvpartition(Ybin(:,i),'Kfold',cvfolds,'Stratify',true);
-    rng('default');
-    out_svm{i} = fitcsvm(Znorm,Ybin(:,i),'Standardize',false,...
-                                         'Weights',Waux(:,i),...
-                                         'CacheSize','maximal',...
-                                         'RemoveDuplicates',true,...
-                                         'KernelFunction',KernelFcn,...
-                                         'OptimizeHyperparameters','auto',...
-                                         'HyperparameterOptimizationOptions',...
-                                         struct('CVPartition',out_cp{i},...
-                                                'Verbose',0,...
-                                                'AcquisitionFunctionName','probability-of-improvement',...
-                                                'ShowPlots',false));
-    out_svm{i} = fitSVMPosterior(out_svm{i});
-    rng(state);
-    [out_Ysub(:,i),aux] = out_svm{i}.resubPredict;
-    out_Pr0sub(:,i) = aux(:,1);
-    [out_Yhat(:,i),aux] = out_svm{i}.predict(Znorm);
-    out_Pr0hat(:,i) = aux(:,1);
-    aux = confusionmat(Ybin(:,i),out_Ysub(:,i));
-    out_cvcmat(i,:) = aux(:);
-    out_boxcosnt(i) = out_svm{i}.HyperparameterOptimizationResults.bestPoint{1,1};
-    out_kscale(i) = out_svm{i}.HyperparameterOptimizationResults.bestPoint{1,2};
-
-    disp(['    -> PYTHIA has trained a model for ''' algolabels{i}, ...
-            ''', there may be some left to train but I refuse to speculate.']);
+    for idx = 1:nalgos
+        [i, cp, svm, Ysub, Pr0sub, Yhat, Pr0hat, cvcmat, boxcosnt, kscale] = fetchNext(futures);
+        out.cp{i} = cp;
+        out.svm{i} = svm;
+        out.Ysub(:,i) = Ysub;
+        out.Pr0sub(:,i) = Pr0sub;
+        out.Yhat(:,i) = Yhat;
+        out.Pr0hat = Pr0hat;
+        out.cvcmat(i,:) = cvcmat;
+        out.boxcosnt(i) = boxcosnt;
+        out.kscale(i) = kscale;
+        disp(['    -> PYTHIA has trained a model for ''' algolabels{i} '''']);
+    end
+else
+    % Pass results direct into the output structure when running in serial.
+    for i=1:nalgos
+        [out.cp{i}, out.svm{i}, ...
+            out.Ysub(:,i), out.Pr0sub(:,i), out.Yhat(:,i), out.Pr0hat(:,i), ...
+            out.cvcmat(i,:), out.boxcosnt(i), out.kscale(i)] = ...
+            PYTHIASingleModel(Ybin(:,i), Waux(:,i), Znorm, opts.cvfolds, KernelFcn);
+        disp(['    -> PYTHIA has trained a model for ''' algolabels{i} '''']);
+    end
 end
-
-% Shift temporary variables back into the output structure.
-out.cp = out_cp;
-out.svm = out_svm;
-out.cvcmat = out_cvcmat;
-out.Ysub = out_Ysub;
-out.Yhat = out_Yhat;
-out.Pr0sub = out_Pr0sub;
-out.Pr0hat = out_Pr0hat;
-out.boxcosnt = out_boxcosnt;
-out.kscale = out_kscale;
 
 tn = out.cvcmat(:,1);
 fp = out.cvcmat(:,3);
@@ -156,4 +143,36 @@ disp('  -> PYTHIA has completed! Performance of the models:');
 disp(' ');
 disp(out.summary);
 
+end
+
+
+function [out_cp, out_svm, out_Ysub, out_Pr0sub, ...
+        out_Yhat, out_Pr0hat, out_cvcmat, out_boxcosnt, out_kscale] = ...
+        PYTHIASingleModel(Ybin, Waux, Znorm, cvfolds, KernelFcn)
+    % TODO check details of random number generation and tic-toc in parallel loops.
+    state = rng;
+    rng('default');
+    out_cp = cvpartition(Ybin,'Kfold',cvfolds,'Stratify',true);
+    rng('default');
+    out_svm = fitcsvm(Znorm,Ybin,'Standardize',false,...
+                                         'Weights',Waux,...
+                                         'CacheSize','maximal',...
+                                         'RemoveDuplicates',true,...
+                                         'KernelFunction',KernelFcn,...
+                                         'OptimizeHyperparameters','auto',...
+                                         'HyperparameterOptimizationOptions',...
+                                         struct('CVPartition',out_cp,...
+                                                'Verbose',0,...
+                                                'AcquisitionFunctionName','probability-of-improvement',...
+                                                'ShowPlots',false));
+    out_svm = fitSVMPosterior(out_svm);
+    rng(state);
+    [out_Ysub,aux] = out_svm.resubPredict;
+    out_Pr0sub = aux(:,1);
+    [out_Yhat,aux] = out_svm.predict(Znorm);
+    out_Pr0hat = aux(:,1);
+    aux = confusionmat(Ybin,out_Ysub);
+    out_cvcmat = aux(:);
+    out_boxcosnt = out_svm.HyperparameterOptimizationResults.bestPoint{1,1};
+    out_kscale = out_svm.HyperparameterOptimizationResults.bestPoint{1,2};
 end
