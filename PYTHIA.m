@@ -45,7 +45,7 @@ if run_parallel
     % required for a small number of variable-length tasks.
     futures(1:nalgos) = parallel.FevalFuture;
     for i = 1:nalgos
-        futures(i) = parfeval(@PYTHIASingleModel, 9, ...
+        futures(i) = parfeval(@PYTHIASingleModel, 10, ...
             Ybin(:,i), Waux(:,i), Znorm, opts.cvfolds, KernelFcn);
     end
 
