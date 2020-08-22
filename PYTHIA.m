@@ -45,12 +45,12 @@ if run_parallel
     % required for a small number of variable-length tasks.
     futures(1:nalgos) = parallel.FevalFuture;
     for i = 1:nalgos
-        futures(i) = parfeval(@PYTHIASingleModel, 9, ...
+        futures(i) = parfeval(@PYTHIASingleModel, 10, ...
             Ybin(:,i), Waux(:,i), Znorm, opts.cvfolds, KernelFcn);
     end
 
     for idx = 1:nalgos
-        [i, cp, svm, Ysub, Pr0sub, Yhat, Pr0hat, cvcmat, boxcosnt, kscale] = fetchNext(futures);
+        [i, elapsed_time, cp, svm, Ysub, Pr0sub, Yhat, Pr0hat, cvcmat, boxcosnt, kscale] = fetchNext(futures);
         out.cp{i} = cp;
         out.svm{i} = svm;
         out.Ysub(:,i) = Ysub;
@@ -60,16 +60,16 @@ if run_parallel
         out.cvcmat(i,:) = cvcmat;
         out.boxcosnt(i) = boxcosnt;
         out.kscale(i) = kscale;
-        disp(['    -> PYTHIA has trained a model for ''' algolabels{i} '''']);
+        disp(['    -> PYTHIA has trained a model for ''' algolabels{i} '''. Elapsed time: ' num2str(elapsed_time,'%.2f') 's']);
     end
 else
     % Pass results direct into the output structure when running in serial.
     for i=1:nalgos
-        [out.cp{i}, out.svm{i}, ...
+        [elapsed_time, out.cp{i}, out.svm{i}, ...
             out.Ysub(:,i), out.Pr0sub(:,i), out.Yhat(:,i), out.Pr0hat(:,i), ...
             out.cvcmat(i,:), out.boxcosnt(i), out.kscale(i)] = ...
             PYTHIASingleModel(Ybin(:,i), Waux(:,i), Znorm, opts.cvfolds, KernelFcn);
-        disp(['    -> PYTHIA has trained a model for ''' algolabels{i} '''']);
+        disp(['    -> PYTHIA has trained a model for ''' algolabels{i} '''. Elapsed time: ' num2str(elapsed_time,'%.2f') 's']);
     end
 end
 
@@ -143,36 +143,4 @@ disp('  -> PYTHIA has completed! Performance of the models:');
 disp(' ');
 disp(out.summary);
 
-end
-
-
-function [out_cp, out_svm, out_Ysub, out_Pr0sub, ...
-        out_Yhat, out_Pr0hat, out_cvcmat, out_boxcosnt, out_kscale] = ...
-        PYTHIASingleModel(Ybin, Waux, Znorm, cvfolds, KernelFcn)
-    % TODO check details of random number generation and tic-toc in parallel loops.
-    state = rng;
-    rng('default');
-    out_cp = cvpartition(Ybin,'Kfold',cvfolds,'Stratify',true);
-    rng('default');
-    out_svm = fitcsvm(Znorm,Ybin,'Standardize',false,...
-                                         'Weights',Waux,...
-                                         'CacheSize','maximal',...
-                                         'RemoveDuplicates',true,...
-                                         'KernelFunction',KernelFcn,...
-                                         'OptimizeHyperparameters','auto',...
-                                         'HyperparameterOptimizationOptions',...
-                                         struct('CVPartition',out_cp,...
-                                                'Verbose',0,...
-                                                'AcquisitionFunctionName','probability-of-improvement',...
-                                                'ShowPlots',false));
-    out_svm = fitSVMPosterior(out_svm);
-    rng(state);
-    [out_Ysub,aux] = out_svm.resubPredict;
-    out_Pr0sub = aux(:,1);
-    [out_Yhat,aux] = out_svm.predict(Znorm);
-    out_Pr0hat = aux(:,1);
-    aux = confusionmat(Ybin,out_Ysub);
-    out_cvcmat = aux(:);
-    out_boxcosnt = out_svm.HyperparameterOptimizationResults.bestPoint{1,1};
-    out_kscale = out_svm.HyperparameterOptimizationResults.bestPoint{1,2};
 end
